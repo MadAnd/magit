@@ -644,6 +644,36 @@ tracked in the current repository are reverted if
             ((string-match ":$"  prompt) (concat prompt " "))
             (t                           (concat prompt ": "))))))
 
+
+
+;; When using
+;;
+;;     git config --global credential.helper 'cache --timeout=3600'
+;;
+;; Emacs sends a SIGHUP to the credential daemon after the git
+;; subprocess exits, cause the daemon to quit.  We can avoid this by
+;; running the daemon from Emacs directly.
+(defvar git-credential-cache--daemon-process nil)
+(defun start-git-credential-cache--daemon (&rest _)
+  (unless (or (process-live-p git-credential-cache--daemon-process)
+              ;; Also check if a daemon was started from some other shell.
+              (memq git-credential-cache--daemon-process (list-system-processes))
+              (setq git-credential-cache--daemon-process
+                    (--first (-let (((&alist 'comm comm 'user user)
+                                     (process-attributes it)))
+                               (and (string= comm "git-credential-cache--daemon")
+                                    (string= user user-login-name)))
+                             (list-system-processes))))
+    (setq git-credential-cache--daemon-process
+          (start-process "git-credential-cache--daemon" "*git-credential-cache--daemon*"
+                         "git-credential-cache--daemon" "~/.git-credential-cache/socket"))))
+
+;; Start daemon before git remote operations.
+(dolist (sym-fun '(magit-push magit-push-matching magit-push-tag magit-push-tags
+                              magit-pull magit-pull-current
+                              magit-fetch magit-fetch-current magit-fetch-all))
+  (advice-add sym-fun :before #'start-git-credential-cache--daemon))
+
 (defun magit-process-wait ()
   (while (and magit-this-process
               (eq (process-status magit-this-process) 'run))
